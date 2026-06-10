@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import logging
 import os
+from io import StringIO
 from pathlib import Path
 from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
+import requests
 
 
 SEED = 42
@@ -16,10 +18,19 @@ RAW_DATA_DIR = Path("data/raw")
 EXTERNAL_DATA_DIR = Path("data/external")
 MONTHS = pd.date_range("2019-01-01", "2024-12-01", freq="MS")
 CLIMATE_ZONES = ("cold", "mixed", "hot")
+NOAA_GSOM_URL_TEMPLATE = "https://www.ncei.noaa.gov/data/global-summary-of-the-month/access/{station_id}.csv"
+NOAA_ZONE_TO_STATION_MAP = {
+    "cold": [
+        NOAA_GSOM_URL_TEMPLATE.format(station_id="USW00014739"),
+        NOAA_GSOM_URL_TEMPLATE.format(station_id="USW00094846"),
+    ],
+    "mixed": [NOAA_GSOM_URL_TEMPLATE.format(station_id="USW00013960")],
+    "hot": [NOAA_GSOM_URL_TEMPLATE.format(station_id="USW00013874")],
+}
 
 HOUSING_COLUMNS = ["month_start", "housing_starts_thousands_saar"]
 PERMIT_COLUMNS = ["month_start", "building_permits_thousands_saar"]
-WEATHER_COLUMNS = ["month_start", "climate_zone", "avg_temp_f", "total_precip_in"]
+WEATHER_COLUMNS = ["month_start", "climate_zone", "avg_temp_f", "total_precip_in", "source"]
 EXTERNAL_WEEKLY_COLUMNS = [
     "week_start_date",
     "housing_starts",
@@ -31,6 +42,7 @@ EXTERNAL_WEEKLY_COLUMNS = [
     "temp_deviation_from_annual_avg",
     "total_precip_in",
     "precip_above_normal_flag",
+    "weather_source",
 ]
 
 LOGGER = logging.getLogger(__name__)
@@ -220,10 +232,100 @@ def _generate_weather(rng: np.random.Generator) -> pd.DataFrame:
                     "climate_zone": climate_zone,
                     "avg_temp_f": round(avg_temp, 1),
                     "total_precip_in": round(total_precip, 2),
+                    "source": "synthetic_fallback",
                 }
             )
 
     return pd.DataFrame.from_records(records, columns=WEATHER_COLUMNS)
+
+
+def _fetch_noaa_weather(zone_to_station_map: dict) -> pd.DataFrame:
+    """Fetch NOAA GSOM monthly weather for the configured climate-zone stations."""
+    station_records: list[pd.DataFrame] = []
+
+    for climate_zone, station_urls in zone_to_station_map.items():
+        if isinstance(station_urls, str):
+            station_urls = [station_urls]
+
+        for station_url in station_urls:
+            url = station_url
+            if not url.startswith("http"):
+                url = NOAA_GSOM_URL_TEMPLATE.format(station_id=url)
+
+            response = None
+            last_error: Optional[Exception] = None
+            for _ in range(2):
+                try:
+                    response = requests.get(url, timeout=30)
+                    response.raise_for_status()
+                    break
+                except requests.RequestException as exc:
+                    last_error = exc
+            else:
+                raise RuntimeError(f"NOAA GSOM station fetch failed for {url}: {last_error}") from last_error
+
+            station = pd.read_csv(StringIO(response.text), dtype=str)
+            _require("DATE" in station.columns, f"NOAA GSOM station data missing DATE column: {url}")
+            _require("PRCP" in station.columns, f"NOAA GSOM station data missing PRCP column: {url}")
+
+            station["month_start"] = pd.to_datetime(station["DATE"].astype(str).str[:7] + "-01", errors="coerce")
+            station = station[station["month_start"].isin(MONTHS)].copy()
+            _require(len(station) == len(MONTHS), f"NOAA GSOM station month coverage incomplete for {url}")
+
+            if "TAVG" in station.columns:
+                avg_temp_tenths_c = pd.to_numeric(station["TAVG"], errors="coerce")
+            else:
+                avg_temp_tenths_c = pd.Series(np.nan, index=station.index)
+
+            if avg_temp_tenths_c.isna().any():
+                _require(
+                    {"TMAX", "TMIN"}.issubset(station.columns),
+                    f"NOAA GSOM station data missing TAVG and TMAX/TMIN fallback columns: {url}",
+                )
+                tmax_tenths_c = pd.to_numeric(station["TMAX"], errors="coerce")
+                tmin_tenths_c = pd.to_numeric(station["TMIN"], errors="coerce")
+                avg_temp_tenths_c = avg_temp_tenths_c.fillna((tmax_tenths_c + tmin_tenths_c) / 2.0)
+
+            precip_tenths_mm = pd.to_numeric(station["PRCP"], errors="coerce")
+            _require(avg_temp_tenths_c.notna().all(), f"NOAA GSOM station temperature values incomplete for {url}")
+            _require(precip_tenths_mm.notna().all(), f"NOAA GSOM station precipitation values incomplete for {url}")
+
+            # GSOM stores temperature in tenths of C and precipitation in tenths of mm.
+            avg_temp_f = (avg_temp_tenths_c / 10.0) * 9.0 / 5.0 + 32.0
+            precip_in = (precip_tenths_mm / 10.0) / 25.4
+
+            station_weather = pd.DataFrame(
+                {
+                    "month_start": station["month_start"],
+                    "climate_zone": climate_zone,
+                    "avg_temp_f": avg_temp_f,
+                    "total_precip_in": precip_in,
+                }
+            )
+            _require(
+                station_weather["avg_temp_f"].between(-80.0, 140.0).all(),
+                f"NOAA GSOM station temperature values outside expected Fahrenheit range for {url}",
+            )
+            _require(
+                station_weather["total_precip_in"].between(0.0, 80.0).all(),
+                f"NOAA GSOM station precipitation values outside expected monthly range for {url}",
+            )
+            station_records.append(station_weather)
+
+    all_stations = pd.concat(station_records, ignore_index=True)
+    weather = (
+        all_stations.groupby(["month_start", "climate_zone"], as_index=False)[["avg_temp_f", "total_precip_in"]]
+        .mean()
+        .assign(
+            avg_temp_f=lambda frame: frame["avg_temp_f"].round(1),
+            total_precip_in=lambda frame: frame["total_precip_in"].round(2),
+            source="noaa_gsom",
+        )
+    )
+    weather["climate_zone"] = pd.Categorical(weather["climate_zone"], categories=CLIMATE_ZONES, ordered=True)
+    weather = weather.sort_values(["month_start", "climate_zone"], ignore_index=True)
+    weather["climate_zone"] = weather["climate_zone"].astype(str)
+    return weather[WEATHER_COLUMNS]
 
 
 def _add_macro_features(housing: pd.DataFrame, permits: pd.DataFrame) -> pd.DataFrame:
@@ -247,7 +349,7 @@ def _add_weather_features(weather: pd.DataFrame) -> pd.DataFrame:
     monthly_precip_avg = enriched.groupby(["climate_zone", "calendar_month"])["total_precip_in"].transform("mean")
     enriched["temp_deviation_from_annual_avg"] = (enriched["avg_temp_f"] - annual_mean).round(1)
     enriched["precip_above_normal_flag"] = enriched["total_precip_in"] > (monthly_precip_avg * 1.2)
-    return enriched.drop(columns=["calendar_month"])
+    return enriched.drop(columns=["calendar_month"]).rename(columns={"source": "weather_source"})
 
 
 def _load_sales_weeks() -> pd.Series:
@@ -330,6 +432,7 @@ def _validate_outputs(
     _require(set(weather["climate_zone"]) == set(CLIMATE_ZONES), "weather climate zones mismatch")
     _require(weather.groupby("climate_zone")["month_start"].nunique().eq(len(MONTHS)).all(), "weather month coverage incomplete")
     _require(weather[["avg_temp_f", "total_precip_in"]].notna().all().all(), "weather contains missing numeric values")
+    _require(weather["source"].notna().all(), "weather contains missing source values")
 
     expected_weekly_rows = len(weeks) * len(climate_zones)
     _require(
@@ -348,6 +451,7 @@ def _validate_outputs(
         "temp_deviation_from_annual_avg",
         "total_precip_in",
         "precip_above_normal_flag",
+        "weather_source",
     ]
     _require(external_weekly[required_non_null].notna().all().all(), "external_weekly contains missing required values")
     weekly_2020_plus = external_weekly["week_start_date"] >= pd.Timestamp("2020-01-01")
@@ -366,9 +470,14 @@ def _write_parquet_outputs(tables: dict[str, pd.DataFrame]) -> None:
         LOGGER.info("Wrote %s (%s rows)", output_path, f"{len(table):,}")
 
 
-def _log_summary(tables: dict[str, pd.DataFrame], macro_source: str) -> None:
+def _log_summary(tables: dict[str, pd.DataFrame], macro_source: str, weather_fallback_reason: Optional[str]) -> None:
     """Log row counts, date ranges, and compact signal summaries."""
     LOGGER.info("Macro source: %s", macro_source)
+    weather_source = tables["weather"]["source"].iloc[0]
+    if weather_source == "synthetic_fallback":
+        LOGGER.info("Weather source: synthetic_fallback (reason: %s)", weather_fallback_reason or "NOAA GSOM unavailable")
+    else:
+        LOGGER.info("Weather source: %s", weather_source)
     for table_name, table in tables.items():
         LOGGER.info("%s rows: %s", table_name, f"{len(table):,}")
         date_column = "week_start_date" if "week_start_date" in table.columns else "month_start"
@@ -410,7 +519,13 @@ def main() -> None:
     weeks = _load_sales_weeks()
     climate_zones = _load_climate_zones()
     housing, permits, macro_source = _load_macro_tables(macro_rng)
-    weather = _generate_weather(weather_rng)
+    weather_fallback_reason = None
+    try:
+        weather = _fetch_noaa_weather(NOAA_ZONE_TO_STATION_MAP)
+    except Exception as exc:  # pragma: no cover - exercised only with live NOAA/network failures.
+        weather_fallback_reason = str(exc)
+        LOGGER.warning("NOAA GSOM weather fetch failed; using deterministic synthetic weather fallback: %s", exc)
+        weather = _generate_weather(weather_rng)
     external_weekly = _build_external_weekly(housing, permits, weather, weeks, climate_zones)
 
     _validate_outputs(housing, permits, weather, external_weekly, weeks, climate_zones)
@@ -421,7 +536,7 @@ def main() -> None:
         "external_weekly": external_weekly,
     }
     _write_parquet_outputs(tables)
-    _log_summary(tables, macro_source)
+    _log_summary(tables, macro_source, weather_fallback_reason)
 
 
 if __name__ == "__main__":
