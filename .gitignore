@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Virtual envs
+venv/
+.venv/
+env/
+
+# Environment
+.env
+.env.local
+
+# Data — keep small samples only, exclude large parquet
+data/raw/*.parquet
+data/processed/*.parquet
+data/external/*.parquet
+data/external/*.csv
+!data/**/.gitkeep
+
+# MLflow artifacts (heavy)
+mlruns/
+mlartifacts/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# OS
+Thumbs.db
+
+# AI tells — never commit
+PLAN.md
+CLAUDE.md
+*.draft.md
+
+# Logs
+*.log
+logs/
+
+# Notebook output strip
+*-checkpoint.ipynb
