@@ -65,7 +65,7 @@ cd building-products-forecast
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# 2. Optional — FRED API key for real macro signals
+# 2. Optional: FRED API key for real macro signals
 cp .env.example .env
 # edit .env, paste FRED_API_KEY (free at fred.stlouisfed.org/docs/api/api_key.html)
 # If missing, code falls back to a deterministic synthetic series.
@@ -101,7 +101,7 @@ true demand (the SKU was on the shelf for part of the week then ran out). For
 LightGBM these weeks are down-weighted (sample weight = 0.3) so the model
 doesn't learn truncated demand as the new normal; for the Croston-TSB intermittent
 forecaster they are excluded from the demand-size update. This is a common
-real-world correction — naive treatment would bias forecasts downward and
+real-world correction; naive treatment would bias forecasts downward and
 push reorder points too low, propagating the stockout pattern.
 
 ### Walk-forward validation
@@ -119,7 +119,7 @@ index is computed only on the first 80% of dates and held fixed.
 ### Why LightGBM at SKU level, Prophet at category level
 - **LightGBM** handles 960 branch × SKU series in a single global model. The
   tree splits on `branch_id`/`sku_id`/`category` learn per-entity intercepts
-  while sharing signal across SKUs — important for the long-tail SKUs that
+  while sharing signal across SKUs, important for the long-tail SKUs that
   don't have enough history for a per-SKU model. It also natively absorbs
   weather and macro covariates, calendar features, and stockout weights.
 - **Prophet** is fit at branch × category granularity (36 models) because
@@ -131,9 +131,9 @@ index is computed only on the first 80% of dates and held fixed.
 
 ### Croston-TSB for intermittent demand
 SKUs with demand in fewer than 40% of training weeks are classified as
-intermittent. For these the Croston-TSB method tracks two state variables —
+intermittent. For these the Croston-TSB method tracks two state variables:
 demand size `z` (smoothed at α=0.1) and demand probability `p` (smoothed at
-β=0.05) — and forecasts `z × p`. This is the standard spare-parts/slow-mover
+β=0.05), and forecasts `z × p`. This is the standard spare-parts/slow-mover
 approach; LightGBM and Prophet systematically over-forecast intermittent items
 because they fit zeros as part of the signal.
 
@@ -160,11 +160,11 @@ with annual demand `D`, order cost `S = $50`, holding rate `h = 25%`,
 and unit cost `c` per SKU.
 
 ### Scenarios
-- **A — 95% service level**: baseline, matches a typical distributor target.
-- **B — 98% aggressive**: prioritizes availability for project-driven contractors.
-- **C — 90% lean**: minimizes working capital tied up in safety stock.
-- **D — Demand-segmented**: 98% on ABC class A items (revenue critical),
-  95% on B, 90% on C. Usually dominates flat targets — same average service
+- **A, 95% service level**: baseline, matches a typical distributor target.
+- **B, 98% aggressive**: prioritizes availability for project-driven contractors.
+- **C, 90% lean**: minimizes working capital tied up in safety stock.
+- **D, Demand-segmented**: 98% on ABC class A items (revenue critical),
+  95% on B, 90% on C. Usually dominates flat targets: same average service
   level with materially lower investment.
 
 ## Headline outputs (from latest pipeline run)
@@ -173,10 +173,10 @@ and unit cost `c` per SKU.
 
 | Scenario | Total Safety Stock | Avg Service Level |
 |----------|--------------------|--------------------|
-| A — 95% baseline | ~$399k | 95.0% |
-| B — 98% aggressive | ~$498k | 98.0% |
-| C — 90% lean | ~$311k | 90.0% |
-| D — segmented | ~$466k | 93.6% (weighted) |
+| A: 95% baseline | ~$399k | 95.0% |
+| B: 98% aggressive | ~$498k | 98.0% |
+| C: 90% lean | ~$311k | 90.0% |
+| D: segmented | ~$466k | 93.6% (weighted) |
 
 **Forecast value add vs naive (test set, avg per SKU):**
 - LightGBM global: ~+26%
@@ -185,13 +185,13 @@ and unit cost `c` per SKU.
 
 ## Dashboard tabs
 
-1. **Branch Demand Overview** — US map of branches colored by region, sized
+1. **Branch Demand Overview**: US map of branches colored by region, sized
    by next-13-week forecast. Branch × category actual-vs-forecast lines.
-2. **Product Mix & Forecast Error** — top bias SKUs, MAPE vs demand volume
+2. **Product Mix & Forecast Error**: top bias SKUs, MAPE vs demand volume
    scatter, ABC-XYZ heatmap.
-3. **Inventory & Replenishment** — scenario toggle (A/B/C/D), recommended
+3. **Inventory & Replenishment**: scenario toggle (A/B/C/D), recommended
    reorder action table, working capital comparison, excess inventory flags.
-4. **Contractor Insights** — segment scatter (spend vs frequency), branch
+4. **Contractor Insights**: segment scatter (spend vs frequency), branch
    concentration heatmap, seasonal buying pattern by segment.
 
 ## Repo layout
@@ -219,7 +219,7 @@ building-products-forecast/
 
 - All RNG paths seeded with `42` (data generation, contractor activity sim,
   KMeans `random_state`, Optuna sampler, LightGBM `seed`).
-- Synthetic data is deterministic — same seed produces byte-identical parquet.
+- Synthetic data is deterministic, same seed produces byte-identical parquet.
 - MLflow runs are file-backed at `./mlruns`; no server required.
 - The dashboard never recomputes; it only reads pre-built parquet outputs.
 
@@ -230,7 +230,7 @@ forecasting problems: highly seasonal SKUs (roofing tracks summer install
 season), intermittent slow-movers (specialty trim colors), and concentrated
 contractor demand (a single roofing crew can swing a branch's weekly numbers).
 A flat ARIMA-per-SKU approach handles none of these well. The project shows
-how to pick the right tool per problem — global gradient boosting for the
+how to pick the right tool per problem: global gradient boosting for the
 fat-tail, Prophet for the aggregated seasonal decomposition, Croston for the
-zero-heavy tail — and connect the resulting forecasts into a working-capital
+zero-heavy tail, and connect the resulting forecasts into a working-capital
 scenario engine that a branch operations manager can actually use.
