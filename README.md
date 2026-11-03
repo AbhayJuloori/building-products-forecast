@@ -73,6 +73,7 @@ cp .env.example .env
 # 3. Run the full pipeline end-to-end
 python run_all.py
 # Skip steps: python run_all.py --skip "synthetic data" "external data"
+# Charts + docs/results.json only: python -m src.report
 
 # 4. Launch the dashboard
 python -m src.dashboard.app
@@ -164,24 +165,47 @@ and unit cost `c` per SKU.
 - **B, 98% aggressive**: prioritizes availability for project-driven contractors.
 - **C, 90% lean**: minimizes working capital tied up in safety stock.
 - **D, Demand-segmented**: 98% on ABC class A items (revenue critical),
-  95% on B, 90% on C. Usually dominates flat targets: same average service
-  level with materially lower investment.
+  95% on B, 90% on C.
 
-## Headline outputs (from latest pipeline run)
+## Results (latest pipeline run)
 
-> Update with your own numbers after running. Placeholder shown below.
+Every number below is written to [`docs/results.json`](docs/results.json) by
+`src/report.py`, the last step of `run_all.py`, from the pipeline's own parquet
+outputs. Test window: 26 weeks, 2024-07-01 to 2024-12-23. Data is synthetic.
 
-| Scenario | Total Safety Stock | Avg Service Level |
-|----------|--------------------|--------------------|
-| A: 95% baseline | ~$399k | 95.0% |
-| B: 98% aggressive | ~$498k | 98.0% |
-| C: 90% lean | ~$311k | 90.0% |
-| D: segmented | ~$466k | 93.6% (weighted) |
+**Forecast accuracy on the test window (mean over branch × SKU series):**
 
-**Forecast value add vs naive (test set, avg per SKU):**
-- LightGBM global: ~+26%
-- Croston-TSB (slow-movers only): ~+25%
-- Prophet branch × category: ~+4%
+| Model | Series | RMSE | MAE | FVA vs seasonal naive (RMSE) | Series beating naive |
+|-------|-------:|-----:|----:|-----------------------------:|---------------------:|
+| Seasonal naive | 960 | 4.99 | 3.80 | 0.0% | n/a |
+| LightGBM global | 960 | 3.65 | 2.81 | **+25.9%** | 98.1% |
+| Prophet branch × category | 960 | 5.79 | 4.94 | −7.9% | 42.1% |
+| Croston-TSB (slow movers only) | 84 | 0.64 | 0.52 | **+25.4%** | 95.2% |
+
+![Forecast value add](docs/figures/forecast_value_add.png)
+
+Prophet loses to the naive baseline. Its branch × category forecasts drift
+downward across the test window and fall below zero by December, while LightGBM
+tracks the actual total closely:
+
+![Actual vs forecast](docs/figures/actual_vs_forecast.png)
+
+**Inventory scenarios (sum over 960 branch × SKU pairs):**
+
+| Scenario | Safety stock investment | Mean service level target | Total inventory cost |
+|----------|------------------------:|--------------------------:|---------------------:|
+| A: 95% flat | $399,456 | 95.0% | $455,397 |
+| B: 98% flat | $498,756 | 98.0% | $480,222 |
+| C: 90% flat | $311,227 | 90.0% | $433,340 |
+| D: ABC segmented | $466,789 | 93.6% (unweighted mean of SKU targets) | $472,230 |
+
+Scenario D costs more than A even though its mean target is lower: class A SKUs
+are 32.5% of SKUs but hold 75% of safety stock dollars, so raising them to 98%
+outweighs the savings from dropping class C to 90%.
+
+![Inventory scenarios](docs/figures/inventory_scenarios.png)
+
+![Dashboard, inventory tab](docs/figures/dashboard_inventory.png)
 
 ## Dashboard tabs
 

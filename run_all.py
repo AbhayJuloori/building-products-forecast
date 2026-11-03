@@ -24,6 +24,7 @@ PIPELINE: list[tuple[str, str]] = [
     ("forecasting", "src.models.forecasting"),
     ("segmentation", "src.models.segmentation"),
     ("inventory optimization", "src.optimization.inventory"),
+    ("report", "src.report"),
 ]
 
 

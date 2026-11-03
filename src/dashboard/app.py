@@ -132,7 +132,7 @@ def empty_fig(title: str, message: str = "No data available") -> go.Figure:
 
 def kpi(title: str, value: str, subtitle: str = "") -> dbc.Card:
     """Build a KPI card."""
-    return dbc.Card(dbc.CardBody([html.Div(title, className="text-muted small text-uppercase"), html.Div(value, className="display-6 fw-bold"), html.Div(subtitle, className="text-muted small")]), className="h-100 border-secondary", color="dark", inverse=True)
+    return dbc.Card(dbc.CardBody([html.Div(title, className="text-muted small text-uppercase"), html.Div(value, className="fs-3 fw-bold"), html.Div(subtitle, className="text-muted small")]), className="h-100 border-secondary")
 
 
 def control(label: str, component: Any) -> list[Any]:
@@ -209,7 +209,7 @@ def overview_kpis(selected: pd.DataFrame, sales: pd.DataFrame, products: pd.Data
         kpi("Total Forecasted Units Next 13W", fmt_units(total_forecast)),
         kpi("Forecast vs Prior Year", fmt_pct((total_forecast - prior) / prior * 100 if prior else 0.0)),
         kpi("Top SKU Next 4W", top_sku),
-        kpi("Avg MAPE", f"{avg_mape:.1f}%" if np.isfinite(avg_mape) else "0.0%"),
+        kpi("Avg MAPE", f"{avg_mape * 100:.1f}%" if np.isfinite(avg_mape) else "0.0%"),
     ]
 
 
